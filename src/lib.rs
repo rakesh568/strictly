@@ -11,8 +11,8 @@ use failure::{err_msg, Error};
 use itertools::Itertools;
 use std::ops::Add;
 use std::str::FromStr;
-//use postgres::{Connection, TlsMode};
 extern crate postgres;
+use postgres::{Connection, TlsMode};
 
 pub enum Operator {
     Equal,
@@ -64,11 +64,8 @@ pub trait Operation<T> {
 
 impl Operation<serde_json::Value> for Operator {
     fn operate(&self, rule: Vec<serde_json::Value>) -> Result<serde_json::Value, failure::Error> {
-        println!("{:?}", rule);
         let v = serde_json::to_value(rule.clone())?;
-        println!("{:?}", v);
         let a: ValueList = serde_json::from_value(v)?;
-        println!("aaaaa {:?}", a);
         match self {
             Operator::Equal => Ok(serde_json::Value::Bool(rule.iter().all_equal())),
             Operator::LTE => {
@@ -76,9 +73,7 @@ impl Operation<serde_json::Value> for Operator {
                 Ok(serde_json::Value::Bool(lte))
             },
             Operator::OR => {
-                println!("inside or");
                 let or = a.or()?;
-                println!("inside or later");
                 Ok(serde_json::Value::Bool(or))
             },
             Operator::AND => {
@@ -106,7 +101,7 @@ impl FromStr for Operator {
 pub fn eval(
     rule: &serde_json::Value,
     data: &serde_json::Value,
-    conn: Option<&PgConnection>,
+    conn: Option<&Connection>,
 ) -> Result<serde_json::Value, Error> {
     let d = data.as_object().unwrap();
     match rule {
@@ -130,11 +125,11 @@ pub fn eval(
                 data.get(k)
                     .map(|x| (*x).clone())
                     .ok_or(err_msg(format!("var_not_found {}", s)))
-            //            } else if s.starts_with("SELECT") || s.starts_with("select") {
-            //                let a: Result<Vec<serde_json::Value>, Error> = sql_query(s.to_owned())
-            //                    .load(conn.unwrap())
-            //                    .map_err(|e| err_msg("sql_query_invalid"));
-            //                Ok(serde_json::Value::Array(a.unwrap()))
+            } else if s.starts_with("SELECT") || s.starts_with("select") {
+                for row in &conn.unwrap().query("SELECT values FROM table1", &[]).unwrap() {
+                    let val: serde_json::Value = row.get(0);
+                }
+                Ok(serde_json::Value::Array(a.unwrap()))
             } else {
                 Ok(serde_json::Value::String(s.clone()))
             }
