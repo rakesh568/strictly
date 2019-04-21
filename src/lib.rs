@@ -2,11 +2,12 @@
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
 extern crate diesel;
 extern crate itertools;
 #[macro_use]
 extern crate serde_json;
-use diesel::{prelude::*, sql_query, PgConnection};
+use diesel::{prelude::*, sql_query, PgConnection, RunQueryDsl, sql_types::Jsonb};
 use failure::{err_msg, Error};
 use itertools::Itertools;
 use std::ops::Add;
@@ -18,10 +19,19 @@ pub enum Operator {
     Equal,
     LTE,
     OR,
-    AND
+    AND,
+    IN
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize, PartialOrd, Clone)]
+#[derive(Debug, Deserialize, QueryableByName)]
+//#[sql_type = "Integer"]
+pub struct Output {
+    #[sql_type = "Jsonb"]
+    pub output: serde_json::Value,
+}
+
+
+#[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum ValueList {
     VecBool(Vec<bool>),
@@ -31,6 +41,7 @@ pub enum ValueList {
     I32inVec(i32, Vec<i32>),
     F64inVec(f64, Vec<f64>),
     StringInVec(String, Vec<String>),
+    ValVecinVec(Vec<serde_json::Value>, Vec<Vec<serde_json::Value>>),
 }
 
 impl ValueList {
@@ -56,6 +67,14 @@ impl ValueList {
 
         }
     }
+    fn in_(&self) -> Result<bool, Error> {
+        match self {
+            ValueList::ValVecinVec(a,b) => Ok(b.contains(a)),
+            _ => Err(err_msg("invalid_data_type"))
+
+        }
+
+    }
 }
 
 pub trait Operation<T> {
@@ -77,10 +96,10 @@ impl Operation<serde_json::Value> for Operator {
                 Ok(serde_json::Value::Bool(or))
             },
             Operator::AND => {
-                let or = a.or()?;
+                let or = a.and()?;
                 Ok(serde_json::Value::Bool(or))
             },
-            _ => Ok(serde_json::Value::Bool(true)),
+            _ => Err(err_msg(format!("Unsupported operator"))),
         }
     }
 }
@@ -92,16 +111,23 @@ impl FromStr for Operator {
         match s.as_ref() {
             "==" => Ok(Operator::Equal),
             "<=" => Ok(Operator::LTE),
-            "OR" => Ok(Operator::OR),
+            "or" | "OR" => Ok(Operator::OR),
+            "in" | "IN" => Ok(Operator::IN),
             x => Err(err_msg(format!("operator_not_found: {}", x))),
         }
     }
 }
 
+pub fn json_aggregate(s: &String) -> String {
+    let a = "select json_agg(t) as output from (".to_owned();
+    let b = ") t";
+    a+&s+b
+}
+
 pub fn eval(
     rule: &serde_json::Value,
     data: &serde_json::Value,
-    conn: Option<&Connection>,
+    conn: Option<&PgConnection>,
 ) -> Result<serde_json::Value, Error> {
     let d = data.as_object().unwrap();
     match rule {
@@ -126,10 +152,12 @@ pub fn eval(
                     .map(|x| (*x).clone())
                     .ok_or(err_msg(format!("var_not_found {}", s)))
             } else if s.starts_with("SELECT") || s.starts_with("select") {
-                for row in &conn.unwrap().query("SELECT values FROM table1", &[]).unwrap() {
-                    let val: serde_json::Value = row.get(0);
-                }
-                Ok(serde_json::Value::Array(a.unwrap()))
+                let s_json_agg = json_aggregate(s);
+                println!("s_json_agg: {:?}", s_json_agg);
+                let a: Vec<Output> = sql_query(s_json_agg).load(conn.unwrap()).unwrap();
+//                    .map_err(|_|err_msg(format!("query_err: {}", s)))?;
+                let a = a.iter().map(|x|x.output.clone()).collect();
+                Ok(serde_json::Value::Array(a))
             } else {
                 Ok(serde_json::Value::String(s.clone()))
             }
@@ -140,9 +168,18 @@ pub fn eval(
 
 #[cfg(test)]
 mod tests {
+    use diesel::{prelude::*, sql_query, PgConnection, RunQueryDsl, sql_types::Jsonb};
+    use crate::diesel::Connection;
     #[test]
     fn test1() {
-        let x = super::eval(&json!({ "==" : [true, {"OR": [true, {"<=": ["$b", 3]}]}] }), &json!({ "a": 1, "b": 2 }), None).unwrap();
+        let db_url = "postgres://root@127.0.0.1/acko";
+        let conn: PgConnection = Connection::establish(&db_url).expect("No connection established");
+
+        let x = super::eval(&json!({ "==" : [true, {"OR": [true, {"<=": ["$b", 3]}]}] }), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
         assert_eq!(x, serde_json::Value::Bool(true));
+//        let y = super::eval(&json!("select * from masters_intermediaryrtoplanmapping"), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
+//        assert_eq!(y, serde_json::Value::Bool(true));
+        let s_json_agg = "select json_agg(t) as output from (select * from masters_intermediaryrtoplanmapping limit 1) t";
+        let a: Vec<super::Output> = sql_query(s_json_agg).load(&conn).unwrap();
     }
 }
