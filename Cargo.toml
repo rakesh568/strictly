@@ -12,6 +12,8 @@ failure = "~0.1.1"
 itertools = "~0.8.0"
 #postgres = "~0.15.2"
 rustc-serialize = "0.3.24"
+slog = "~2.1.1"
+slog-scope = "~4.0.1"
 
 [dependencies.diesel]
 version = "~1.4.2"
