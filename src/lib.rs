@@ -214,28 +214,76 @@ fn parse_sql_query(s: &String, conn: &PgConnection) -> Result<Vec<serde_json::Va
     Ok(out)
 }
 
-pub fn parse_time(s: &String) -> Result<DateTime<Utc>, Error> {
+pub fn parse_year_now(s: &String) -> Result<i32, Error> {
+    if s.starts_with("NOW.YEAR") {
+        let mut s1 = s.clone();
+        s1.retain(|c|c!=' ');
+        if s1.as_str().contains("+") {
+            let parts = s1.split("+").collect::<Vec<_>>();
+            if parts.len()!=2 {
+                return Err(err_msg("parse_time_err"));
+            }
+            let d = parts[1].parse::<i32>().unwrap();
+            return Ok(Utc::now().year() + d)
+        }
+        if s1.as_str().contains("-") {
+            let parts = s1.split("-").collect::<Vec<_>>();
+            if parts.len()!=2 {
+                return Err(err_msg("parse_time_err"));
+            }
+            let d = parts[1].parse::<i32>().unwrap();
+            return Ok(Utc::now().year() - d)
+        }
+    }
+    return Err(err_msg("parse_year_err"));
+}
+
+pub fn parse_month_now(s: &String) -> Result<i32, Error> {
+    if s.starts_with("NOW.MONTH") {
+        let mut s1 = s.clone();
+        s1.retain(|c|c!=' ');
+        if s1.as_str().contains("+") {
+            let parts = s1.split("+").collect::<Vec<_>>();
+            if parts.len()!=2 {
+                return Err(err_msg("parse_time_err"));
+            }
+            let d = parts[1].parse::<i32>().unwrap();
+            return Ok(Utc::now().month() as i32 + d)
+        }
+        if s1.as_str().contains("-") {
+            let parts = s1.split("-").collect::<Vec<_>>();
+            if parts.len()!=2 {
+                return Err(err_msg("parse_time_err"));
+            }
+            let d = parts[1].parse::<i32>().unwrap();
+            return Ok(Utc::now().month() as i32 - d)
+        }
+    }
+    return Err(err_msg("parse_year_err"));
+}
+
+pub fn parse_time_now(s: &String) -> Result<DateTime<Utc>, Error> {
     if s.starts_with("NOW") {
         let mut s1 = s.clone();
         s1.retain(|c|c!=' ');
         if s1.as_str().contains("+") {
-            let parts = s1.split(":").collect::<Vec<_>>();
+            let parts = s1.split("+").collect::<Vec<_>>();
             if parts.len()!=2 {
-                return Err(err_msg("query_err"));
+                return Err(err_msg("parse_time_err"));
             }
             let d = parts[1].parse::<i64>().unwrap();
             return Ok(Utc::now() + chrono::Duration::days(d))
         }
         if s1.as_str().contains("-") {
-            let parts = s1.split(":").collect::<Vec<_>>();
+            let parts = s1.split("-").collect::<Vec<_>>();
             if parts.len()!=2 {
-                return Err(err_msg("query_err"));
+                return Err(err_msg("parse_time_err"));
             }
             let d = parts[1].parse::<i64>().unwrap();
             return Ok(Utc::now() - chrono::Duration::days(d))
         }
     }
-    return Err(err_msg("query_err"));
+    return Err(err_msg("parse_time_err"));
 }
 
 pub fn eval(
@@ -282,9 +330,12 @@ pub fn eval(
             } else if s.starts_with("SELECT") || s.starts_with("select") {
                 let conn = conn.ok_or(err_msg("Need connection for executing sql query"))?;
                 Ok(serde_json::Value::Array(parse_sql_query(&s, conn)?))
-            } else if s.as_str() == "NOW" {
-//                s.retain(|c| c!=" ");
-                Ok(serde_json::Value::String(parse_time(s)?.to_rfc3339()))
+            } else if s.starts_with("NOW.YEAR") {
+                Ok(serde_json::Value::from(parse_year_now(s)?))
+            } else if s.starts_with("NOW.MONTH") {
+                Ok(serde_json::Value::from(parse_month_now(s)?))
+            } else if s.starts_with("NOW") {
+                Ok(serde_json::Value::String(parse_time_now(s)?.to_rfc3339()))
             } else {
                 Ok(serde_json::Value::String(s.clone()))
             }
