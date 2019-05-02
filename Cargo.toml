@@ -14,6 +14,7 @@ itertools = "~0.8.0"
 rustc-serialize = "0.3.24"
 slog = "~2.1.1"
 slog-scope = "~4.0.1"
+chrono-tz = "~0.4"
 
 [dependencies.diesel]
 version = "~1.4.2"
@@ -24,3 +25,7 @@ features = [
 [dependencies.postgres]
 version = "~0.15.2"
 features = ["with-serde_json"]
+
+[dependencies.chrono]
+version = "0.4"
+features = ["serde"]

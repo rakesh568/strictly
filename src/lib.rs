@@ -15,6 +15,10 @@ use std::str::FromStr;
 extern crate postgres;
 extern crate slog;
 extern crate slog_scope;
+extern crate chrono;
+extern crate chrono_tz;
+use chrono::{prelude::*, DateTime, Utc};
+
 use std::fmt;
 use postgres::{Connection, TlsMode};
 
@@ -74,20 +78,53 @@ enum ValueList {
     VecBool(Vec<bool>),
     Veci32(Vec<i32>),
     Vecf64(Vec<f64>),
+    VecDateTime(Vec<DateTime<Utc>>),
     VecString(Vec<String>),
     ValInVec(serde_json::Value, Vec<serde_json::Value>),
 }
 
 impl ValueList {
+    fn lt(&self) -> Result<bool, Error>
+    {
+        match self {
+            ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
+            ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
+            ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()<0)),
+            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
+        }
+    }
     fn lte(&self) -> Result<bool, Error>
     {
         match self {
             ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
+            ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()<=0)),
             ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
             _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
         }
     }
+    fn gt(&self) -> Result<bool, Error>
+    {
+        match self {
+            ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
+            ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
+            ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()>0)),
+            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
+        }
+    }
+    fn gte(&self) -> Result<bool, Error>
+    {
+        match self {
+            ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
+            ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
+            ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()>=0)),
+            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
+        }
+    }
+
     fn or(&self) -> Result<bool, Error> {
         match self {
             ValueList::VecBool(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| *a || *b)),
@@ -120,8 +157,20 @@ impl Operation<serde_json::Value> for Operator {
         let a: ValueList = serde_json::from_value(v)?;
         match self {
             Operator::Equal => Ok(serde_json::Value::Bool(rule.iter().all_equal())),
+            Operator::LT => {
+                let lte = a.lt()?;
+                Ok(serde_json::Value::Bool(lte))
+            },
             Operator::LTE => {
                 let lte = a.lte()?;
+                Ok(serde_json::Value::Bool(lte))
+            },
+            Operator::GT => {
+                let lte = a.gt()?;
+                Ok(serde_json::Value::Bool(lte))
+            },
+            Operator::GTE => {
+                let lte = a.gte()?;
                 Ok(serde_json::Value::Bool(lte))
             },
             Operator::OR => {
@@ -149,7 +198,6 @@ fn json_aggregate(s: &String) -> String {
 
 fn parse_sql_query(s: &String, conn: &PgConnection) -> Result<Vec<serde_json::Value>, Error> {
     let s_json_agg = json_aggregate(s);
-    println!("");
     let a: Vec<Output> = sql_query(s_json_agg).load(conn)
                     .map_err(|_|err_msg(format!("query_err: {}", s)))?;
     let a = match &a[0].output {
@@ -164,6 +212,30 @@ fn parse_sql_query(s: &String, conn: &PgConnection) -> Result<Vec<serde_json::Va
     }
     println!("{:?}", out);
     Ok(out)
+}
+
+pub fn parse_time(s: &String) -> Result<DateTime<Utc>, Error> {
+    if s.starts_with("NOW") {
+        let mut s1 = s.clone();
+        s1.retain(|c|c!=' ');
+        if s1.as_str().contains("+") {
+            let parts = s1.split(":").collect::<Vec<_>>();
+            if parts.len()!=2 {
+                return Err(err_msg("query_err"));
+            }
+            let d = parts[1].parse::<i64>().unwrap();
+            return Ok(Utc::now() + chrono::Duration::days(d))
+        }
+        if s1.as_str().contains("-") {
+            let parts = s1.split(":").collect::<Vec<_>>();
+            if parts.len()!=2 {
+                return Err(err_msg("query_err"));
+            }
+            let d = parts[1].parse::<i64>().unwrap();
+            return Ok(Utc::now() - chrono::Duration::days(d))
+        }
+    }
+    return Err(err_msg("query_err"));
 }
 
 pub fn eval(
@@ -181,10 +253,14 @@ pub fn eval(
             Ok(serde_json::Value::Array(evaled))
         }
         serde_json::Value::Object(o) => {
-            let x = o.keys().next().unwrap();
+            let mut keys = o.keys();
+            let mut x = keys.next().ok_or(err_msg("Empty Map"))?;
+            if x == "err" {
+                x = keys.next().ok_or(err_msg("Empty Map"))?;
+            }
 //            let err: Option<&str> = o.keys().next().and_then(|k| o.get(k)).and_then(|v| v.as_str());
             let err = o.get("err").and_then(|v|v.as_str());
-
+            println!("inside_object: x: {:?}", x);
             let op = Operator::from_str(&x)?;
             let v = o.get(&x.clone()).ok_or(err_msg(format!("no_value_found for {}", x)))?;
             let v: Vec<serde_json::Value> = serde_json::from_value( eval(v, data, conn)?)?;
@@ -205,7 +281,10 @@ pub fn eval(
                     .ok_or(err_msg(format!("var_not_found {}", s)))
             } else if s.starts_with("SELECT") || s.starts_with("select") {
                 let conn = conn.ok_or(err_msg("Need connection for executing sql query"))?;
-                Ok(serde_json::Value::Array(parse_sql_query(s, conn)?))
+                Ok(serde_json::Value::Array(parse_sql_query(&s, conn)?))
+            } else if s.as_str() == "NOW" {
+//                s.retain(|c| c!=" ");
+                Ok(serde_json::Value::String(parse_time(s)?.to_rfc3339()))
             } else {
                 Ok(serde_json::Value::String(s.clone()))
             }
@@ -226,7 +305,7 @@ mod tests {
 //        let x = super::eval(&json!({ "==" : [true, {"OR": [true, {"<=": ["$registration_year", 2016]}]}] }), &json!({ "a": 1, "registration_year": 2018 }), Some(&conn)).unwrap();
 //        assert_eq!(x, serde_json::Value::Bool(true));
         let y = super::eval(&json!({"in": [[35, "Invictus Insurance Broking Services Private Limited"], "select id, name from masters_intermediary"],
-        "err": ""}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
+        "err": "My err"}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
         assert_eq!(y, serde_json::Value::Bool(true));
 //        let s_json_agg = "select json_agg(t) as output from (select * from masters_intermediaryrtoplanmapping limit 1) t";
 //        let a: Vec<super::Output> = sql_query(s_json_agg).load(&conn).unwrap();
