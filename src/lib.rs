@@ -90,7 +90,7 @@ impl ValueList {
             ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
             ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()<0)),
-            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
+//            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a < b)),
             _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
         }
     }
@@ -100,7 +100,7 @@ impl ValueList {
             ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
             ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()<=0)),
-            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
+//            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a <= b)),
             _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
         }
     }
@@ -110,7 +110,7 @@ impl ValueList {
             ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
             ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()>0)),
-            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
+//            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
             _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
         }
     }
@@ -120,11 +120,10 @@ impl ValueList {
             ValueList::Veci32(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
             ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()>=0)),
-            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
+//            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
             _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
         }
     }
-
     fn or(&self) -> Result<bool, Error> {
         match self {
             ValueList::VecBool(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| *a || *b)),
@@ -155,6 +154,7 @@ impl Operation<serde_json::Value> for Operator {
     fn operate(&self, rule: &Vec<serde_json::Value>) -> Result<serde_json::Value, failure::Error> {
         let v = serde_json::to_value(rule.clone())?;
         let a: ValueList = serde_json::from_value(v)?;
+        println!("{:?}", a);
         match self {
             Operator::Equal => Ok(serde_json::Value::Bool(rule.iter().all_equal())),
             Operator::LT => {
@@ -218,7 +218,9 @@ pub fn parse_year_now(s: &String) -> Result<i32, Error> {
     if s.starts_with("NOW.YEAR") {
         let mut s1 = s.clone();
         s1.retain(|c|c!=' ');
-        if s1.as_str().contains("+") {
+        if s1.as_str() == "NOW" {
+            return Ok(Utc::now().month() as i32);
+        } else if s1.as_str().contains("+") {
             let parts = s1.split("+").collect::<Vec<_>>();
             if parts.len()!=2 {
                 return Err(err_msg("parse_time_err"));
@@ -242,7 +244,9 @@ pub fn parse_month_now(s: &String) -> Result<i32, Error> {
     if s.starts_with("NOW.MONTH") {
         let mut s1 = s.clone();
         s1.retain(|c|c!=' ');
-        if s1.as_str().contains("+") {
+        if s1.as_str() == "NOW" {
+            return Ok(Utc::now().month() as i32);
+        } else if s1.as_str().contains("+") {
             let parts = s1.split("+").collect::<Vec<_>>();
             if parts.len()!=2 {
                 return Err(err_msg("parse_time_err"));
@@ -266,13 +270,15 @@ pub fn parse_time_now(s: &String) -> Result<DateTime<Utc>, Error> {
     if s.starts_with("NOW") {
         let mut s1 = s.clone();
         s1.retain(|c|c!=' ');
-        if s1.as_str().contains("+") {
+        if s1.as_str() == "NOW" {
+            return Ok(Utc::now());
+        } else if s1.as_str().contains("+") {
             let parts = s1.split("+").collect::<Vec<_>>();
             if parts.len()!=2 {
                 return Err(err_msg("parse_time_err"));
             }
             let d = parts[1].parse::<i64>().unwrap();
-            return Ok(Utc::now() + chrono::Duration::days(d))
+            return Ok(Utc::now() + chrono::Duration::days(d));
         }
         if s1.as_str().contains("-") {
             let parts = s1.split("-").collect::<Vec<_>>();
@@ -280,7 +286,7 @@ pub fn parse_time_now(s: &String) -> Result<DateTime<Utc>, Error> {
                 return Err(err_msg("parse_time_err"));
             }
             let d = parts[1].parse::<i64>().unwrap();
-            return Ok(Utc::now() - chrono::Duration::days(d))
+            return Ok(Utc::now() - chrono::Duration::days(d));
         }
     }
     return Err(err_msg("parse_time_err"));
@@ -357,6 +363,7 @@ mod tests {
 //        assert_eq!(x, serde_json::Value::Bool(true));
         let y = super::eval(&json!({"in": [[35, "Invictus Insurance Broking Services Private Limited"], "select id, name from masters_intermediary"],
         "err": "My err"}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
+        let y = super::eval(&json!({"<=": ["NOW", "2024-04-25T18:30:00Z"]}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
         assert_eq!(y, serde_json::Value::Bool(true));
 //        let s_json_agg = "select json_agg(t) as output from (select * from masters_intermediaryrtoplanmapping limit 1) t";
 //        let a: Vec<super::Output> = sql_query(s_json_agg).load(&conn).unwrap();
