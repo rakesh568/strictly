@@ -20,14 +20,18 @@ extern crate chrono_tz;
 use chrono::{prelude::*, DateTime, Utc};
 
 use std::fmt;
-use postgres::{Connection, TlsMode};
+//use postgres::{Connection, TlsMode};
 
 enum Operator {
     Equal,
+    NotEqual,
     LT,
     LTE,
     GT,
     GTE,
+    Add,
+    Subtract,
+    Multiply,
     OR,
     AND,
     IN
@@ -39,11 +43,16 @@ impl FromStr for Operator {
     fn from_str(s: &str) -> Result<Self, Error> {
         match s.as_ref() {
             "==" => Ok(Operator::Equal),
+            "!=" => Ok(Operator::NotEqual),
             "<" => Ok(Operator::LT),
             "<=" => Ok(Operator::LTE),
             ">" => Ok(Operator::GT),
             ">=" => Ok(Operator::GTE),
+            "+" => Ok(Operator::Add),
+            "-" => Ok(Operator::Subtract),
+            "*" => Ok(Operator::Multiply),
             "or" | "OR" => Ok(Operator::OR),
+            "and" | "AND" => Ok(Operator::AND),
             "in" | "IN" => Ok(Operator::IN),
             x => Err(err_msg(format!("operator_not_found: {}", x))),
         }
@@ -54,10 +63,14 @@ impl fmt::Display for Operator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Operator::Equal => write!(f, "=="),
+            Operator::NotEqual => write!(f, "!="),
             Operator::LT => write!(f, "<"),
             Operator::LTE => write!(f, "<="),
             Operator::GT => write!(f, ">"),
             Operator::GTE => write!(f, ">="),
+            Operator::Add => write!(f, "+"),
+            Operator::Subtract => write!(f, "-"),
+            Operator::Multiply => write!(f, "*"),
             Operator::OR => write!(f, "or"),
             Operator::AND => write!(f, "and"),
             Operator::IN => write!(f, "in"),
@@ -111,7 +124,7 @@ impl ValueList {
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
             ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()>0)),
 //            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a > b)),
-            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::GT)))
         }
     }
     fn gte(&self) -> Result<bool, Error>
@@ -121,9 +134,73 @@ impl ValueList {
             ValueList::Vecf64(d) =>Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
             ValueList::VecDateTime(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a.signed_duration_since(*b).num_days()>=0)),
 //            ValueList::VecString(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| a >= b)),
-            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::LTE)))
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::GTE)))
         }
     }
+
+    fn add(&self) -> Result<serde_json::Value, Error>
+    {
+        match self {
+            ValueList::Veci32(d) => {
+                let x: i32 = d.iter().sum();
+                Ok(serde_json::Value::from(x))
+            },
+            ValueList::Vecf64(d) => {
+                let x: f64 = d.iter().sum();
+                Ok(serde_json::Value::from(x))
+            },
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::Add)))
+        }
+    }
+
+    fn multiply(&self) -> Result<serde_json::Value, Error>
+    {
+        match self {
+            ValueList::Veci32(d) => {
+                let mut x = 1;
+                let mut i = d.iter();
+                for v in i {
+                    x = x*(*v);
+                }
+                return Ok(serde_json::Value::from(x));
+            },
+            ValueList::Vecf64(d) => {
+                let mut x = 1.0;
+                let mut i = d.iter();
+                for v in i {
+                    x = x*(*v);
+                }
+                return Ok(serde_json::Value::from(x));
+            },
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::Multiply)))
+        }
+    }
+
+    fn subtract(&self) -> Result<serde_json::Value, Error>
+    {
+        match self {
+            ValueList::Veci32(d) => {
+                let mut x = *(d.first().unwrap_or(&0));
+                let mut i = d.iter();
+                i.next();
+                for v in i {
+                    x = x-*v;
+                }
+                return Ok(serde_json::Value::from(x));
+            },
+            ValueList::Vecf64(d) => {
+                let mut x = *(d.first().unwrap_or(&0.0));
+                let mut i = d.iter();
+                i.next();
+                for v in i {
+                    x = x-*v;
+                }
+                return Ok(serde_json::Value::from(x));
+            },
+            _ => Err(err_msg(format!("invalid_data_type {:?} for operator {} ", &self, Operator::Subtract)))
+        }
+    }
+
     fn or(&self) -> Result<bool, Error> {
         match self {
             ValueList::VecBool(d) => Ok(d.into_iter().tuple_windows().all(|(a, b)| *a || *b)),
@@ -139,7 +216,13 @@ impl ValueList {
     }
     fn in_(&self) -> Result<bool, Error> {
         match self {
-            ValueList::ValInVec(a,b) => Ok(b.contains(a)),
+            ValueList::ValInVec(a,b) => {
+                let mut x = (*a).clone();
+                if !x.is_array() {
+                    x = serde_json::Value::Array(vec![x]);
+                }
+                Ok(b.contains(&x) || b.contains(a))
+            },
             _ => Err(err_msg("invalid_data_type"))
 
         }
@@ -157,6 +240,7 @@ impl Operation<serde_json::Value> for Operator {
         println!("{:?}", a);
         match self {
             Operator::Equal => Ok(serde_json::Value::Bool(rule.iter().all_equal())),
+            Operator::NotEqual => Ok(serde_json::Value::Bool(!rule.iter().all_equal())),
             Operator::LT => {
                 let lte = a.lt()?;
                 Ok(serde_json::Value::Bool(lte))
@@ -172,6 +256,16 @@ impl Operation<serde_json::Value> for Operator {
             Operator::GTE => {
                 let lte = a.gte()?;
                 Ok(serde_json::Value::Bool(lte))
+            },
+            Operator::Add => {
+                a.add()
+            },
+            Operator::Multiply => {
+                a.multiply()
+            },
+            Operator::Subtract => {
+                let s = a.subtract()?;
+                Ok(s)
             },
             Operator::OR => {
                 let or = a.or()?;
@@ -363,9 +457,15 @@ mod tests {
 //        assert_eq!(x, serde_json::Value::Bool(true));
         let y = super::eval(&json!({"in": [[35, "Invictus Insurance Broking Services Private Limited"], "select id, name from masters_intermediary"],
         "err": "My err"}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
-        let y = super::eval(&json!({"<=": ["NOW", "2024-04-25T18:30:00Z"]}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
+        let y = super::eval(&json!({"in": ["bike_comprehensive", "select id from ackore_plan"],
+        "err": "My err"}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
+
+        let y = super::eval(&json!({">=": ["2019-05-03T00:00:00+00:00", "NOW-10"]}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
         assert_eq!(y, serde_json::Value::Bool(true));
-//        let s_json_agg = "select json_agg(t) as output from (select * from masters_intermediaryrtoplanmapping limit 1) t";
+        let y = super::eval(&json!({"*": [8.0, 3]}), &json!({ "a": 1, "b": 2 }), Some(&conn)).unwrap();
+        assert_eq!(y, serde_json::Value::from(24.0));
+
+//        let s_json_agg = "select json_agg(t) as output from (select * from masters_intermediaryr`toplanmapping limit 1) t";
 //        let a: Vec<super::Output> = sql_query(s_json_agg).load(&conn).unwrap();
     }
 }
